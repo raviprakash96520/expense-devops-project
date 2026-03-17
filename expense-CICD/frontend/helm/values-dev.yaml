@@ -5,4 +5,4 @@ deployment:
 hpa:
   cpuUtilization: 15
 tgb:
-  arn: arn:aws:elasticloadbalancing:us-east-1:315069654700:targetgroup/expense-dev/70d3fc64a11421cd
+  arn: arn:aws:elasticloadbalancing:us-east-1:736184860833:targetgroup/expense-dev/c03c9649954e34e0
