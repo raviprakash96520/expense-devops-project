@@ -3,6 +3,8 @@ networks:
   # docker volume create mysql
 volumes:
   mysql:
+    external: true
+      
 services:
   backend:
     image: ravi96520/backend:1.0.0
