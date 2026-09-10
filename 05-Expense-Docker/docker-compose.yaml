@@ -1,0 +1,35 @@
+networks:
+  expense: {}
+  # docker volume create mysql
+volumes:
+  mysql:
+services:
+  backend:
+    image: joindevops/backend:1.0.0
+    command: sh -c "sleep 10 && node /opt/backend/index.js"
+    networks:
+    - expense
+    container_name: backend
+    depends_on:
+    - mysql
+
+  # docker run -d --name mysql --network expense -v mysql:/var/lib/mysql mysql:1.0.0
+  mysql:
+    image: joindevops/mysql:1.0.0
+    networks:
+    - expense
+    container_name: mysql
+    volumes:
+    - mysql:/var/lib/mysql
+
+  frontend:
+    image: joindevops/frontend:1.0.0
+    networks:
+    - expense
+    container_name: frontend
+    ports:
+    - 80:80
+    depends_on:
+    - backend
+  
+  
