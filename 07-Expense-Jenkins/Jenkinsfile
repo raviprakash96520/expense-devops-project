@@ -59,6 +59,8 @@ pipeline {
                 echo 'Running SonarQube code quality scan...'
                 withSonarQubeEnv('SonarQube-Server') {
                     sh '''
+                        export JAVA_HOME=/usr/lib/jvm/java-21-openjdk
+                        export PATH=$JAVA_HOME/bin:$PATH
                         sonar-scanner \
                           -Dsonar.projectKey=expense-app \
                           -Dsonar.projectName="Expense Application" \
