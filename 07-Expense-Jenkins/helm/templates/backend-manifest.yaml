@@ -35,7 +35,7 @@ metadata:
     app: backend
     tier: api
 spec:
-  replicas: 2
+  replicas: {{ .Values.deployment.backend.replicaCount }}
   revisionHistoryLimit: 3
   minReadySeconds: 10
   progressDeadlineSeconds: 600
@@ -116,7 +116,7 @@ spec:
 
       containers:
         - name: backend
-          image: ravi96520/backend:1.0.0
+          image: "{{ .Values.deployment.backend.imageURL }}:{{ .Values.deployment.backend.imageVersion }}"
           imagePullPolicy: IfNotPresent
 
           ports:
