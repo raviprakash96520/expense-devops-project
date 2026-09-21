@@ -48,7 +48,7 @@ pipeline {
                         export SNYK_TOKEN=$SNYK_TOKEN
                         snyk auth $SNYK_TOKEN
                         cd ${BACKEND_DIR} && snyk test --json > ../snyk-backend-report.json || true
-                        cd ../${FRONTEND_DIR} && snyk test --json > ../snyk-frontend-report.json || true
+                        cd ${FRONTEND_DIR} && snyk test --json > ../snyk-frontend-report.json || true
                     '''
                 }
             }
