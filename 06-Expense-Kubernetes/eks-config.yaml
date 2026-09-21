@@ -15,8 +15,24 @@ metadata:
   name: expense
   region: us-east-1
 
+iam:
+  withOIDC: true
+
 managedNodeGroups:
   - name: expense
-    instanceTypes: ["t3.small","t3.micro"]
+    instanceTypes:
+      - t3.medium
+      - t3a.medium
+
     desiredCapacity: 2
+    minSize: 2
+    maxSize: 3
+
     spot: true
+
+    volumeSize: 20
+    volumeType: gp3
+
+    labels:
+      project: expense
+      role: worker
