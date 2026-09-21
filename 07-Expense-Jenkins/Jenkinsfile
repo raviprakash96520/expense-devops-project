@@ -190,22 +190,20 @@ stage('5. SonarQube Quality Gate Check') {
         '''
     }
 }
-        
-
       stage('10. Push Images to AWS ECR') {
     steps {
         echo 'Pushing Docker images to AWS ECR...'
 
         withCredentials([
-            usernamePassword(
+            [
+                $class: 'AmazonWebServicesCredentialsBinding',
                 credentialsId: 'aws-ecr-credentials',
-                usernameVariable: 'AWS_ACCESS_KEY_ID',
-                passwordVariable: 'AWS_SECRET_ACCESS_KEY'
-            )
+                accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+            ]
         ]) {
             sh '''
                 echo "Checking AWS authentication..."
-
                 aws sts get-caller-identity
 
                 aws ecr get-login-password \
@@ -222,8 +220,9 @@ stage('5. SonarQube Quality Gate Check') {
             '''
         }
     }
-}
+}  
 
+      
         stage('11. Update Helm values-dev.yaml for ArgoCD') {
             steps {
                 echo 'Updating imageVersion inside values-dev.yaml...'
