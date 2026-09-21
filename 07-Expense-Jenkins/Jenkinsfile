@@ -1,36 +1,36 @@
 pipeline {
-    agent { label 'agent-1' }
-
-    options {
-        skipDefaultCheckout(true)
+    agent {
+        label 'agent-1'
     }
 
     environment {
-        AWS_ACCOUNT_ID = '376159574294'
-        AWS_REGION = 'us-east-1'
-        ECR_REGISTRY = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        AWS_ACCOUNT_ID      = '376159574294'
+        AWS_REGION          = 'us-east-1'
+        ECR_REGISTRY        = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
 
-        BACKEND_IMAGE_NAME = 'expense-backend'
+        BACKEND_IMAGE_NAME  = 'expense-backend'
         FRONTEND_IMAGE_NAME = 'expense-frontend'
-        IMAGE_TAG = ''
-        GIT_COMMIT_FULL = ''
-        SONAR_QG_STATUS = 'UNKNOWN'
+        IMAGE_TAG           = ''
+        GIT_COMMIT_FULL     = ''
 
-        BACKEND_DIR = '07-Expense-Jenkins/backend-CI'
-        FRONTEND_DIR = '07-Expense-Jenkins/frontend'
-        HELM_DIR = '07-Expense-Jenkins/helm'
+        BACKEND_DIR         = '07-Expense-Jenkins/backend-CI'
+        FRONTEND_DIR        = '07-Expense-Jenkins/frontend'
+        HELM_DIR            = '07-Expense-Jenkins/helm'
 
-        GIT_REPO_URL = 'github.com/raviprakash96520/expense-devops-project.git'
-        RECIPIENT_EMAIL = 'ravireddy6198@gmail.com'
+        GIT_REPO_URL        = 'github.com/raviprakash96520/expense-devops-project.git'
+        RECIPIENT_EMAIL     = 'ravireddy6198@gmail.com'
 
-        GIT_CREDENTIALS_ID = 'github-credentials-id'
-        SNYK_TOKEN_ID = 'snyk-api-token'
-        AWS_CREDENTIALS_ID = 'aws-ecr-credentials'
+        GIT_CREDENTIALS_ID   = 'github-credentials-id'
+        SONAR_CREDENTIALS_ID = 'sonarqube-token'
+        SNYK_TOKEN_ID        = 'snyk-api-token'
+        AWS_CREDENTIALS_ID   = 'aws-ecr-credentials'
     }
 
     stages {
+
         stage('1. Checkout Code') {
             steps {
+                echo 'Checking out code from GitHub...'
                 checkout scm
 
                 script {
@@ -47,25 +47,30 @@ pipeline {
                     echo "Git Commit: ${env.GIT_COMMIT_FULL}"
                     echo "Image Tag: ${env.IMAGE_TAG}"
 
-                    currentBuild.displayName = "#${env.BUILD_NUMBER}-${env.IMAGE_TAG}"
+                    currentBuild.displayName =
+                        "#${env.BUILD_NUMBER}-${env.IMAGE_TAG}"
                 }
             }
         }
 
         stage('2. Secrets Scan - GitLeaks') {
             steps {
+                echo 'Running GitLeaks scan...'
+
                 sh '''
                     gitleaks detect \
-                    --source=. \
-                    --report-format=json \
-                    --report-path=gitleaks-report.json \
-                    --verbose || true
+                        --source=. \
+                        --report-format=json \
+                        --report-path=gitleaks-report.json \
+                        --verbose || true
                 '''
             }
         }
 
         stage('3. Dependency Scan - Snyk') {
             steps {
+                echo 'Running Snyk dependency scanning...'
+
                 withCredentials([
                     string(
                         credentialsId: "${SNYK_TOKEN_ID}",
@@ -91,28 +96,37 @@ pipeline {
 
         stage('4. SAST Scan - SonarQube') {
             steps {
+                echo 'Running SonarQube SAST and code quality scan...'
+
                 withSonarQubeEnv('SonarQube') {
                     sh '''
                         sonar-scanner \
-                        -Dsonar.projectKey=expense-app \
-                        -Dsonar.projectName="Expense Application" \
-                        -Dsonar.sources="$BACKEND_DIR,$FRONTEND_DIR"
+                            -Dsonar.projectKey=expense-app \
+                            -Dsonar.projectName="Expense Application" \
+                            -Dsonar.sources="$BACKEND_DIR,$FRONTEND_DIR"
                     '''
                 }
             }
         }
 
-        stage('5. SonarQube Quality Gate') {
+        stage('5. SonarQube Quality Gate Check') {
             steps {
+                echo 'Waiting for SonarQube Quality Gate result...'
+
                 timeout(time: 5, unit: 'MINUTES') {
                     script {
                         def qg = waitForQualityGate()
-                        env.SONAR_QG_STATUS = qg.status
 
-                        echo "Quality Gate: ${env.SONAR_QG_STATUS}"
+                        echo "SonarQube Quality Gate Status: ${qg.status}"
 
                         if (qg.status != 'OK') {
-                            echo 'WARNING: Quality Gate failed. Pipeline continuing for testing.'
+                            echo """
+                            WARNING:
+                            SonarQube Quality Gate status is ${qg.status}.
+                            Pipeline will continue for DevSecOps testing.
+                            """
+                        } else {
+                            echo 'SonarQube Quality Gate Passed.'
                         }
                     }
                 }
@@ -121,20 +135,23 @@ pipeline {
 
         stage('6. IaC / Helm Scan - Checkov') {
             steps {
+                echo 'Scanning Helm charts with Checkov...'
+
                 sh '''
-                    checkov -d "$HELM_DIR" \
-                    -o json \
-                    --soft-fail \
-                    > checkov-report.json || true
+                    checkov \
+                        -d "$HELM_DIR" \
+                        -o json \
+                        --soft-fail \
+                        > checkov-report.json || true
                 '''
             }
         }
 
         stage('7. Docker Build Images') {
             steps {
-                script {
-                    echo "Building images with tag: ${env.IMAGE_TAG}"
+                echo "Building Docker images with tag ${env.IMAGE_TAG}..."
 
+                script {
                     docker.build(
                         "${ECR_REGISTRY}/${BACKEND_IMAGE_NAME}:${env.IMAGE_TAG}",
                         "${BACKEND_DIR}"
@@ -150,43 +167,51 @@ pipeline {
 
         stage('8. Generate SBOM - Syft') {
             steps {
+                echo 'Generating Software Bill of Materials...'
+
                 sh '''
                     syft \
-                    "$ECR_REGISTRY/$BACKEND_IMAGE_NAME:$IMAGE_TAG" \
-                    -o cyclonedx-json=sbom-backend-report.json
+                        "$ECR_REGISTRY/$BACKEND_IMAGE_NAME:$IMAGE_TAG" \
+                        -o cyclonedx-json=sbom-backend-report.json
 
                     syft \
-                    "$ECR_REGISTRY/$FRONTEND_IMAGE_NAME:$IMAGE_TAG" \
-                    -o cyclonedx-json=sbom-frontend-report.json
+                        "$ECR_REGISTRY/$FRONTEND_IMAGE_NAME:$IMAGE_TAG" \
+                        -o cyclonedx-json=sbom-frontend-report.json
                 '''
             }
         }
 
         stage('9. Container Scan - Trivy') {
             steps {
+                echo 'Scanning Backend image with Trivy...'
+
                 sh '''
                     trivy image \
-                    --image-src docker \
-                    --format template \
-                    --template "@/usr/local/share/trivy/templates/html.tpl" \
-                    -o trivy-backend-report.html \
-                    "$ECR_REGISTRY/$BACKEND_IMAGE_NAME:$IMAGE_TAG" || true
+                        --format template \
+                        --template "@/usr/local/share/trivy/templates/html.tpl" \
+                        -o trivy-backend-report.html \
+                        "$ECR_REGISTRY/$BACKEND_IMAGE_NAME:$IMAGE_TAG" || true
+                '''
 
+                echo 'Scanning Frontend image with Trivy...'
+
+                sh '''
                     trivy image \
-                    --image-src docker \
-                    --format template \
-                    --template "@/usr/local/share/trivy/templates/html.tpl" \
-                    -o trivy-frontend-report.html \
-                    "$ECR_REGISTRY/$FRONTEND_IMAGE_NAME:$IMAGE_TAG" || true
+                        --format template \
+                        --template "@/usr/local/share/trivy/templates/html.tpl" \
+                        -o trivy-frontend-report.html \
+                        "$ECR_REGISTRY/$FRONTEND_IMAGE_NAME:$IMAGE_TAG" || true
                 '''
             }
         }
 
         stage('10. Push Images to AWS ECR') {
             steps {
+                echo 'Pushing Docker images to AWS ECR...'
+
                 withCredentials([
                     usernamePassword(
-                        credentialsId: "${AWS_CREDENTIALS_ID}",
+                        credentialsId: 'aws-ecr-credentials',
                         usernameVariable: 'AWS_ACCESS_KEY_ID',
                         passwordVariable: 'AWS_SECRET_ACCESS_KEY'
                     )
@@ -195,23 +220,25 @@ pipeline {
                         aws sts get-caller-identity
 
                         aws ecr get-login-password \
-                        --region "$AWS_REGION" | \
+                            --region "$AWS_REGION" |
                         docker login \
-                        --username AWS \
-                        --password-stdin "$ECR_REGISTRY"
+                            --username AWS \
+                            --password-stdin "$ECR_REGISTRY"
 
                         docker push \
-                        "$ECR_REGISTRY/$BACKEND_IMAGE_NAME:$IMAGE_TAG"
+                            "$ECR_REGISTRY/$BACKEND_IMAGE_NAME:$IMAGE_TAG"
 
                         docker push \
-                        "$ECR_REGISTRY/$FRONTEND_IMAGE_NAME:$IMAGE_TAG"
+                            "$ECR_REGISTRY/$FRONTEND_IMAGE_NAME:$IMAGE_TAG"
                     '''
                 }
             }
         }
 
-        stage('11. Update Helm Values for ArgoCD') {
+        stage('11. Update Helm values-dev.yaml for ArgoCD') {
             steps {
+                echo 'Updating imageVersion inside values-dev.yaml...'
+
                 withCredentials([
                     usernamePassword(
                         credentialsId: "${GIT_CREDENTIALS_ID}",
@@ -223,18 +250,20 @@ pipeline {
                         rm -rf manifest-repo
 
                         git clone \
-                        https://$GIT_USER:$GIT_PASSWORD@$GIT_REPO_URL \
-                        manifest-repo
+                            https://$GIT_USER:$GIT_PASSWORD@$GIT_REPO_URL \
+                            manifest-repo
 
                         cd "manifest-repo/$HELM_DIR"
 
-                        sed -i \
-                        '/backend:/,/frontend:/ s|imageVersion:.*|imageVersion: "'"$IMAGE_TAG"'"|' \
-                        values-dev.yaml
+                        NEW_TAG="$IMAGE_TAG"
 
                         sed -i \
-                        '/frontend:/,$ s|imageVersion:.*|imageVersion: "'"$IMAGE_TAG"'"|' \
-                        values-dev.yaml
+                            '/backend:/,/frontend:/ s|imageVersion:.*|imageVersion: "'"$NEW_TAG"'"|' \
+                            values-dev.yaml
+
+                        sed -i \
+                            '/frontend:/,$ s|imageVersion:.*|imageVersion: "'"$NEW_TAG"'"|' \
+                            values-dev.yaml
 
                         echo "Updated values-dev.yaml:"
                         cat values-dev.yaml
@@ -245,10 +274,11 @@ pipeline {
                         git add values-dev.yaml
 
                         if ! git diff --cached --quiet; then
-                            git commit -m "chore(cd): deploy $IMAGE_TAG [skip ci]"
+                            git commit \
+                                -m "chore(cd): update imageVersion to $NEW_TAG [skip ci]"
                             git push origin main
                         else
-                            echo "No Helm changes detected."
+                            echo "No changes detected in values-dev.yaml"
                         fi
                     '''
                 }
@@ -257,19 +287,17 @@ pipeline {
     }
 
     post {
+
         always {
-            echo 'Security reports available in workspace:'
+            echo 'Archiving generated security reports...'
 
             sh '''
-                echo "===== GENERATED REPORTS ====="
+                echo "Generated reports:"
                 ls -lh gitleaks-report.json 2>/dev/null || true
-                ls -lh snyk-backend-report.json 2>/dev/null || true
-                ls -lh snyk-frontend-report.json 2>/dev/null || true
+                ls -lh snyk-*.json 2>/dev/null || true
                 ls -lh checkov-report.json 2>/dev/null || true
-                ls -lh sbom-backend-report.json 2>/dev/null || true
-                ls -lh sbom-frontend-report.json 2>/dev/null || true
-                ls -lh trivy-backend-report.html 2>/dev/null || true
-                ls -lh trivy-frontend-report.html 2>/dev/null || true
+                ls -lh sbom-*.json 2>/dev/null || true
+                ls -lh trivy-*.html 2>/dev/null || true
             '''
 
             archiveArtifacts(
@@ -277,142 +305,143 @@ pipeline {
                 allowEmptyArchive: true
             )
 
+            echo 'Cleaning up local Docker images...'
+
             sh '''
-                docker rmi "$ECR_REGISTRY/$BACKEND_IMAGE_NAME:$IMAGE_TAG" || true
-                docker rmi "$ECR_REGISTRY/$FRONTEND_IMAGE_NAME:$IMAGE_TAG" || true
-                docker container prune -f || true
-                docker builder prune -af || true
+                docker rmi \
+                    "$ECR_REGISTRY/$BACKEND_IMAGE_NAME:$IMAGE_TAG" || true
+
+                docker rmi \
+                    "$ECR_REGISTRY/$FRONTEND_IMAGE_NAME:$IMAGE_TAG" || true
             '''
         }
 
         success {
             emailext(
                 to: "${RECIPIENT_EMAIL}",
-                subject: "SUCCESS: ${env.JOB_NAME} | ${env.IMAGE_TAG} | Build #${env.BUILD_NUMBER}",
-                mimeType: 'text/html',
-                attachLog: true,
-                compressLog: true,
 
-                attachmentsPattern: 'gitleaks-report.json,snyk-backend-report.json,snyk-frontend-report.json,checkov-report.json,sbom-backend-report.json,sbom-frontend-report.json,trivy-backend-report.html,trivy-frontend-report.html',
+                subject: "SUCCESSFUL: ${env.JOB_NAME} | ${env.IMAGE_TAG} | Build #${env.BUILD_NUMBER}",
 
                 body: """
                 <html>
-                <body style="font-family:Arial,sans-serif">
-                    <h2 style="color:green">Build Status: SUCCESS</h2>
+                <body style="font-family: Arial, sans-serif;">
+
+                    <h2 style="color: green;">Build Status: SUCCESS</h2>
 
                     <p>Hi Team,</p>
+
                     <p>
+                        The DevSecOps pipeline execution for
                         <b>${env.JOB_NAME}</b>
-                        Build #${env.BUILD_NUMBER} completed successfully.
+                        (Build #${env.BUILD_NUMBER})
+                        completed successfully.
                     </p>
 
                     <h3>Build Details</h3>
-                    <table border="1" cellpadding="7" cellspacing="0"
-                           style="border-collapse:collapse">
-                        <tr>
-                            <td><b>Git Commit</b></td>
-                            <td>${env.GIT_COMMIT_FULL}</td>
-                        </tr>
-                        <tr>
-                            <td><b>Image Tag</b></td>
-                            <td>${env.IMAGE_TAG}</td>
-                        </tr>
-                        <tr>
-                            <td><b>Sonar Quality Gate</b></td>
-                            <td>${env.SONAR_QG_STATUS}</td>
-                        </tr>
-                    </table>
+
+                    <ul>
+                        <li><b>Git Commit:</b> ${env.GIT_COMMIT_FULL}</li>
+                        <li><b>Image Tag:</b> ${env.IMAGE_TAG}</li>
+                    </ul>
 
                     <h3>Docker Images</h3>
-                    <p>
-                        <b>Backend:</b>
-                        ${ECR_REGISTRY}/${BACKEND_IMAGE_NAME}:${env.IMAGE_TAG}
-                    </p>
-                    <p>
-                        <b>Frontend:</b>
-                        ${ECR_REGISTRY}/${FRONTEND_IMAGE_NAME}:${env.IMAGE_TAG}
-                    </p>
+
+                    <ul>
+                        <li>
+                            <b>Backend:</b>
+                            ${ECR_REGISTRY}/${BACKEND_IMAGE_NAME}:${env.IMAGE_TAG}
+                        </li>
+
+                        <li>
+                            <b>Frontend:</b>
+                            ${ECR_REGISTRY}/${FRONTEND_IMAGE_NAME}:${env.IMAGE_TAG}
+                        </li>
+                    </ul>
 
                     <h3>ArgoCD Deployment</h3>
+
                     <p>
-                        values-dev.yaml updated with
-                        <b>imageVersion: ${env.IMAGE_TAG}</b>
+                        Helm <b>values-dev.yaml</b> has been updated with
+                        imageVersion <b>${env.IMAGE_TAG}</b>.
                     </p>
 
                     <h3>Security Reports</h3>
+
                     <p>
-                        GitLeaks, Snyk, Checkov, SBOM and Trivy reports
-                        are attached to this email.
+                        The generated GitLeaks, Snyk, Checkov, SBOM
+                        and Trivy reports are attached to this email.
                     </p>
 
                     <p>
-                        <a href="${env.BUILD_URL}artifact/">
-                            View All Jenkins Artifacts
-                        </a>
-                    </p>
-
-                    <p>
-                        <a href="http://13.218.249.139:9000/dashboard?id=expense-app">
-                            Open SonarQube Dashboard
-                        </a>
-                    </p>
-
-                    <p>
+                        Jenkins Build:
                         <a href="${env.BUILD_URL}">
-                            Open Jenkins Build
+                            ${env.BUILD_URL}
                         </a>
                     </p>
+
                 </body>
                 </html>
-                """
+                """,
+
+                mimeType: 'text/html',
+
+                attachmentsPattern:
+                    'gitleaks-report.json,snyk-backend-report.json,snyk-frontend-report.json,checkov-report.json,sbom-backend-report.json,sbom-frontend-report.json,trivy-backend-report.html,trivy-frontend-report.html',
+
+                attachLog: true
             )
         }
 
         failure {
             emailext(
                 to: "${RECIPIENT_EMAIL}",
-                subject: "FAILED: ${env.JOB_NAME} | ${env.IMAGE_TAG} | Build #${env.BUILD_NUMBER}",
-                mimeType: 'text/html',
-                attachLog: true,
-                compressLog: true,
 
-                attachmentsPattern: 'gitleaks-report.json,snyk-backend-report.json,snyk-frontend-report.json,checkov-report.json,sbom-backend-report.json,sbom-frontend-report.json,trivy-backend-report.html,trivy-frontend-report.html',
+                subject: "FAILED: ${env.JOB_NAME} | ${env.IMAGE_TAG} | Build #${env.BUILD_NUMBER}",
 
                 body: """
                 <html>
-                <body style="font-family:Arial,sans-serif">
-                    <h2 style="color:red">Build Status: FAILED</h2>
+                <body style="font-family: Arial, sans-serif;">
+
+                    <h2 style="color: red;">Build Status: FAILED</h2>
+
+                    <p>Hi Team,</p>
 
                     <p>
+                        The DevSecOps pipeline execution for
                         <b>${env.JOB_NAME}</b>
-                        Build #${env.BUILD_NUMBER} failed.
+                        (Build #${env.BUILD_NUMBER})
+                        has failed.
                     </p>
 
                     <p><b>Git Commit:</b> ${env.GIT_COMMIT_FULL}</p>
                     <p><b>Image Tag:</b> ${env.IMAGE_TAG}</p>
 
                     <p>
-                        Reports generated before the failure are attached.
+                        Available generated reports are attached.
                     </p>
 
                     <p>
-                        <a href="${env.BUILD_URL}artifact/">
-                            View Available Reports
+                        Jenkins Build:
+                        <a href="${env.BUILD_URL}">
+                            ${env.BUILD_URL}
                         </a>
                     </p>
 
-                    <p>
-                        <a href="${env.BUILD_URL}console">
-                            Open Jenkins Console
-                        </a>
-                    </p>
                 </body>
                 </html>
-                """
+                """,
+
+                mimeType: 'text/html',
+
+                attachmentsPattern:
+                    'gitleaks-report.json,snyk-backend-report.json,snyk-frontend-report.json,checkov-report.json,sbom-backend-report.json,sbom-frontend-report.json,trivy-backend-report.html,trivy-frontend-report.html',
+
+                attachLog: true
             )
         }
 
         cleanup {
+            echo 'Cleaning Jenkins workspace...'
             cleanWs()
         }
     }
