@@ -12,9 +12,9 @@ pipeline {
         FRONTEND_IMAGE_NAME = 'expense-frontend'
         IMAGE_TAG           = "${BUILD_NUMBER}"
 
-        BACKEND_DIR        = 'backend-CI'
-        FRONTEND_DIR       = 'frontend'
-        HELM_DIR           = 'helm'
+        BACKEND_DIR        = '07-Expense-Jenkins/backend-CI'
+        FRONTEND_DIR       = '07-Expense-Jenkins/frontend'
+        HELM_DIR           = '07-Expense-Jenkins/helm'
 
         GIT_REPO_URL       = 'github.com/raviprakash96520/expense-devops-project.git'
         RECIPIENT_EMAIL    = 'ravireddy6198@gmail.com'
