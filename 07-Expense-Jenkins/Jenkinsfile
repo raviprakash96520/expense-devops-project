@@ -1,31 +1,24 @@
 pipeline {
     agent {
-        label 'rhel9' // Agent-1 పైన ఎగ్జిక్యూట్ అవ్వడానికి Label
+        label 'rhel9'
     }
 
     environment {
-        // AWS & ECR Configurations
         AWS_ACCOUNT_ID     = '376159574294'
         AWS_REGION         = 'us-east-1'
         ECR_REGISTRY       = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
         
-        // ECR Image Names
         BACKEND_IMAGE_NAME  = 'expense-backend'
         FRONTEND_IMAGE_NAME = 'expense-frontend'
         IMAGE_TAG           = "${BUILD_NUMBER}"
 
-        // Directory Paths
         BACKEND_DIR        = 'backend-CI'
         FRONTEND_DIR       = 'frontend'
         HELM_DIR           = 'helm'
 
-        // GitHub Repository URL
         GIT_REPO_URL       = 'github.com/raviprakash96520/expense-devops-project.git'
-        
-        // Notification Settings
         RECIPIENT_EMAIL    = 'ravireddy6198@gmail.com'
         
-        // Credentials IDs
         GIT_CREDENTIALS_ID   = 'github-credentials-id'
         SONAR_CREDENTIALS_ID = 'sonarqube-token'
         SNYK_TOKEN_ID        = 'snyk-api-token'
@@ -51,8 +44,12 @@ pipeline {
             steps {
                 echo 'Running Snyk dependency scanning...'
                 withCredentials([string(credentialsId: "${SNYK_TOKEN_ID}", variable: 'SNYK_TOKEN')]) {
-                    sh "cd ${BACKEND_DIR} && snyk test --json > ../snyk-backend-report.json || true"
-                    sh "cd ${FRONTEND_DIR} && snyk test --json > ../snyk-frontend-report.json || true"
+                    sh '''
+                        export SNYK_TOKEN=$SNYK_TOKEN
+                        snyk auth $SNYK_TOKEN
+                        cd ${BACKEND_DIR} && snyk test --json > ../snyk-backend-report.json || true
+                        cd ../${FRONTEND_DIR} && snyk test --json > ../snyk-frontend-report.json || true
+                    '''
                 }
             }
         }
@@ -60,14 +57,13 @@ pipeline {
         stage('4. SAST Scan - SonarQube') {
             steps {
                 echo 'Running SonarQube code quality scan...'
-                // System settings lo configure chesina SonarQube-Server environment ni vadutunam
                 withSonarQubeEnv('SonarQube-Server') {
-                    sh """
+                    sh '''
                         sonar-scanner \
                           -Dsonar.projectKey=expense-app \
                           -Dsonar.projectName="Expense Application" \
-                          -Dsonar.sources=${BACKEND_DIR},${FRONTEND_DIR}
-                    """
+                          -Dsonar.sources=$BACKEND_DIR,$FRONTEND_DIR
+                    '''
                 }
             }
         }
@@ -117,11 +113,11 @@ pipeline {
             steps {
                 echo 'Pushing Docker images to AWS ECR...'
                 withCredentials([usernamePassword(credentialsId: "${AWS_CREDENTIALS_ID}", usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
-                    sh """
-                        aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}
-                        docker push ${ECR_REGISTRY}/${BACKEND_IMAGE_NAME}:${IMAGE_TAG}
-                        docker push ${ECR_REGISTRY}/${FRONTEND_IMAGE_NAME}:${IMAGE_TAG}
-                    """
+                    sh '''
+                        aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+                        docker push $ECR_REGISTRY/$BACKEND_IMAGE_NAME:$IMAGE_TAG
+                        docker push $ECR_REGISTRY/$FRONTEND_IMAGE_NAME:$IMAGE_TAG
+                    '''
                 }
             }
         }
@@ -131,21 +127,23 @@ pipeline {
                 echo 'Updating imageVersion inside helm/values-dev.yaml...'
                 withCredentials([usernamePassword(credentialsId: "${GIT_CREDENTIALS_ID}", usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASSWORD')]) {
                     sh '''
-                        git clone https://${GIT_USER}:${GIT_PASSWORD}@${GIT_REPO_URL} manifest-repo
-                        cd manifest-repo/${HELM_DIR}
+                        git clone https://$GIT_USER:$GIT_PASSWORD@$GIT_REPO_URL manifest-repo
+                        cd manifest-repo/$HELM_DIR
 
-                        sed -i '/backend:/,/frontend:/ s|imageVersion:.*|imageVersion: "${IMAGE_TAG}"|' values-dev.yaml
-                        sed -i '/frontend:/,$ s|imageVersion:.*|imageVersion: "${IMAGE_TAG}"|' values-dev.yaml
+                        NEW_TAG="$IMAGE_TAG"
+                        sed -i '/backend:/,/frontend:/ s|imageVersion:.*|imageVersion: "'"$NEW_TAG"'"|' values-dev.yaml
+                        sed -i '/frontend:/,$ s|imageVersion:.*|imageVersion: "'"$NEW_TAG"'"|' values-dev.yaml
 
                         git config user.email "jenkins-ci@example.com"
                         git config user.name "Jenkins CI Bot"
                         git add values-dev.yaml
-                        git commit -m "chore(cd): update imageVersion in values-dev.yaml to ${IMAGE_TAG} [skip ci]"
+                        git commit -m "chore(cd): update imageVersion in values-dev.yaml to $NEW_TAG [skip ci]"
                         git push origin main
                     '''
                 }
             }
         }
+    }
 
     post {
         always {
