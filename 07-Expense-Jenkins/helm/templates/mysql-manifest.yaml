@@ -1,0 +1,218 @@
+# 00-namespace.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: expense
+  labels:
+    project: expense
+
+---
+# 01-mysql-configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mysql
+  namespace: expense
+data:
+  DB_USER: expense
+  DB_DATABASE: transactions
+
+---
+# 02-mysql-secret.yaml
+# Lab passwords matching your existing MySQL image.
+# Do not commit actual passwords to GitHub.
+# Changing this Secret does not change passwords in an initialized database.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: mysql-secret
+  namespace: expense
+type: Opaque
+data:
+  MYSQL_ROOT_PASSWORD: RXhwZW5zZUFwcEAx
+  DB_PWD: RXhwZW5zZUFwcEAx
+
+---
+# 03-storageclass.yaml
+# Requires standard AWS EBS CSI driver and appropriate IAM permissions.
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: expense-ebs
+provisioner: ebs.csi.aws.com
+parameters:
+  type: gp3
+  encrypted: "true"
+reclaimPolicy: Retain
+allowVolumeExpansion: true
+volumeBindingMode: WaitForFirstConsumer
+
+---
+# 04-mysql.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql-headless
+  namespace: expense
+spec:
+  clusterIP: None
+  selector:
+    project: expense
+    component: mysql
+    tier: db
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+      protocol: TCP
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mysql
+  namespace: expense
+spec:
+  type: ClusterIP
+  selector:
+    project: expense
+    component: mysql
+    tier: db
+  ports:
+    - name: mysql
+      port: 3306
+      targetPort: mysql
+      protocol: TCP
+
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mysql
+  namespace: expense
+  labels:
+    project: expense
+    component: mysql
+    tier: db
+spec:
+  serviceName: mysql-headless
+
+  # More replicas require MySQL replication configuration.
+  replicas: 1
+  revisionHistoryLimit: 3
+
+  selector:
+    matchLabels:
+      project: expense
+      component: mysql
+      tier: db
+
+  updateStrategy:
+    type: RollingUpdate
+
+  template:
+    metadata:
+      labels:
+        project: expense
+        component: mysql
+        tier: db
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+
+      containers:
+        - name: mysql
+          image: ravi96520/mysql:1.0.0
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: mysql
+              containerPort: 3306
+
+          # These initialization variables apply only to an empty data directory.
+          # Keep username/database aligned with the image's initialization SQL.
+          env:
+            - name: MYSQL_DATABASE
+              valueFrom:
+                configMapKeyRef:
+                  name: mysql
+                  key: DB_DATABASE
+
+            - name: MYSQL_USER
+              valueFrom:
+                configMapKeyRef:
+                  name: mysql
+                  key: DB_USER
+
+            - name: MYSQL_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: DB_PWD
+
+            - name: MYSQL_ROOT_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: MYSQL_ROOT_PASSWORD
+
+          resources:
+            requests:
+              cpu: 250m
+              memory: 512Mi
+            limits:
+              cpu: "1"
+              memory: 1Gi
+
+          startupProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  MYSQL_PWD="$MYSQL_ROOT_PASSWORD" \
+                    mysqladmin ping -h 127.0.0.1 -u root --silent
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 60
+
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  MYSQL_PWD="$MYSQL_ROOT_PASSWORD" \
+                    mysql -h 127.0.0.1 -u root \
+                    --connect-timeout=3 -Nse 'SELECT 1'
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+
+          # Checks server responsiveness, not credential validity.
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -ec
+                - |
+                  MYSQL_PWD="$MYSQL_ROOT_PASSWORD" \
+                    mysqladmin ping -h 127.0.0.1 -u root --silent
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 6
+
+          volumeMounts:
+            - name: mysql
+              mountPath: /var/lib/mysql
+
+  volumeClaimTemplates:
+    - metadata:
+        name: mysql
+      spec:
+        accessModes:
+          - ReadWriteOnce
+        storageClassName: expense-ebs
+        resources:
+          requests:
+            storage: 1Gi

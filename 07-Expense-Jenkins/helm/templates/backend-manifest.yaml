@@ -1,0 +1,229 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: backend
+  namespace: expense
+data:
+  DB_HOST: mysql
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: backend
+  namespace: expense
+spec:
+  type: ClusterIP
+  selector:
+    project: expense
+    app: backend
+    tier: api
+  ports:
+    - name: http
+      port: 8080
+      targetPort: http
+      protocol: TCP
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: expense
+  labels:
+    project: expense
+    app: backend
+    tier: api
+spec:
+  replicas: 2
+  revisionHistoryLimit: 3
+  minReadySeconds: 10
+  progressDeadlineSeconds: 600
+
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+
+  selector:
+    matchLabels:
+      project: expense
+      app: backend
+      tier: api
+
+  template:
+    metadata:
+      labels:
+        project: expense
+        app: backend
+        tier: api
+    spec:
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              project: expense
+              app: backend
+              tier: api
+
+      initContainers:
+        - name: mysql-check
+          image: ravi96520/mysql:1.0.0
+          imagePullPolicy: IfNotPresent
+
+          envFrom:
+            - configMapRef:
+                name: backend
+            - configMapRef:
+                name: mysql
+
+          env:
+            - name: MYSQL_PWD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: DB_PWD
+
+          # Wait for authenticated access to the application table.
+          command:
+            - /bin/sh
+            - -ec
+            - |
+              until mysql \
+                -h "$DB_HOST" \
+                -u "$DB_USER" \
+                --connect-timeout=3 \
+                "$DB_DATABASE" \
+                -Nse 'SELECT 1 FROM transactions LIMIT 1';
+              do
+                echo "Waiting for MySQL credentials and transactions table..."
+                sleep 5
+              done
+
+          resources:
+            requests:
+              cpu: 50m
+              memory: 64Mi
+            limits:
+              cpu: 250m
+              memory: 128Mi
+
+      containers:
+        - name: backend
+          image: ravi96520/backend:1.0.0
+          imagePullPolicy: IfNotPresent
+
+          ports:
+            - name: http
+              containerPort: 8080
+
+          envFrom:
+            - configMapRef:
+                name: backend
+            - configMapRef:
+                name: mysql
+
+          env:
+            - name: DB_PWD
+              valueFrom:
+                secretKeyRef:
+                  name: mysql-secret
+                  key: DB_PWD
+
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+
+          startupProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 30
+
+          # Existing /health endpoint checks the API, not DB connectivity.
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: http
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
+
+---
+# Requires Metrics Server.
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: backend
+  namespace: expense
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: backend
+
+  minReplicas: 2
+  maxReplicas: 10
+
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70
+
+  behavior:
+    scaleUp:
+      stabilizationWindowSeconds: 0
+      policies:
+        - type: Pods
+          value: 2
+          periodSeconds: 60
+
+    scaleDown:
+      stabilizationWindowSeconds: 300
+      policies:
+        - type: Pods
+          value: 1
+          periodSeconds: 60
+
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: backend
+  namespace: expense
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      project: expense
+      app: backend
+      tier: api

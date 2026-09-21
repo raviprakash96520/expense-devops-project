@@ -1,0 +1,69 @@
+# Requires NetworkPolicy enforcement support in the cluster's CNI.
+# These policies restrict ingress; egress remains allowed.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: mysql-ingress
+  namespace: expense
+spec:
+  podSelector:
+    matchLabels:
+      project: expense
+      component: mysql
+      tier: db
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              project: expense
+              app: backend
+              tier: api
+      ports:
+        - protocol: TCP
+          port: 3306
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-ingress
+  namespace: expense
+spec:
+  podSelector:
+    matchLabels:
+      project: expense
+      app: backend
+      tier: api
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              project: expense
+              app: frontend
+              tier: web
+      ports:
+        - protocol: TCP
+          port: 8080
+
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-ingress
+  namespace: expense
+spec:
+  podSelector:
+    matchLabels:
+      project: expense
+      app: frontend
+      tier: web
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8080
