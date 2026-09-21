@@ -1,0 +1,217 @@
+pipeline {
+    agent {
+        label 'agent-1'
+    }
+
+    environment {
+        AWS_ACCOUNT_ID     = '376159574294'
+        AWS_REGION         = 'us-east-1'
+        ECR_REGISTRY       = "${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+        
+        BACKEND_IMAGE_NAME  = 'expense-backend'
+        FRONTEND_IMAGE_NAME = 'expense-frontend'
+        IMAGE_TAG           = "${BUILD_NUMBER}"
+
+        BACKEND_DIR        = '07-Expense-Jenkins/backend-CI'
+        FRONTEND_DIR       = '07-Expense-Jenkins/frontend'
+        HELM_DIR           = '07-Expense-Jenkins/helm'
+
+        GIT_REPO_URL       = 'github.com/raviprakash96520/expense-devops-project.git'
+        RECIPIENT_EMAIL    = 'ravireddy6198@gmail.com'
+        
+        GIT_CREDENTIALS_ID   = 'github-credentials-id'
+        SONAR_CREDENTIALS_ID = 'sonarqube-token'
+        SNYK_TOKEN_ID        = 'snyk-api-token'
+        AWS_CREDENTIALS_ID   = 'aws-ecr-credentials'
+    }
+
+    stages {
+        stage('1. Checkout Code') {
+            steps {
+                echo 'Checking out code from GitHub...'
+                checkout scm
+            }
+        }
+
+        stage('2. Secrets Scan - GitLeaks') {
+            steps {
+                echo 'Running GitLeaks scan...'
+                sh 'gitleaks detect --source=. --report-path=gitleaks-report.json --verbose || true'
+            }
+        }
+
+        stage('3. Dependency Scan - Snyk') {
+            steps {
+                echo 'Running Snyk dependency scanning...'
+                withCredentials([string(credentialsId: "${SNYK_TOKEN_ID}", variable: 'SNYK_TOKEN')]) {
+                    sh '''
+                        export SNYK_TOKEN=$SNYK_TOKEN
+                        snyk auth $SNYK_TOKEN
+                        cd ${BACKEND_DIR} && snyk test --json > ../snyk-backend-report.json || true
+                        cd ${FRONTEND_DIR} && snyk test --json > ../snyk-frontend-report.json || true
+                    '''
+                }
+            }
+        }
+
+       stage('4. SAST Scan - SonarQube') {
+            steps {
+                echo 'Running SonarQube code quality scan...'
+                withCredentials([string(credentialsId: "${SONAR_CREDENTIALS_ID}", variable: 'SONAR_TOKEN')]) {
+                    sh '''
+                        export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-21.0.12.1.1-1.2.el9.x86_64
+                        export PATH=$JAVA_HOME/bin:$PATH
+                        sonar-scanner \
+                          -Dsonar.host.url=http://13.218.249.139:9000 \
+                          -Dsonar.token=$SONAR_TOKEN \
+                          -Dsonar.projectKey=expense-app \
+                          -Dsonar.projectName="Expense Application" \
+                          -Dsonar.sources=$BACKEND_DIR,$FRONTEND_DIR
+                    '''
+                }
+            }
+        }
+
+        stage('5. SonarQube Quality Gate Check') {
+            steps {
+                echo 'Waiting for SonarQube Quality Gate result...'
+                timeout(time: 5, unit: 'MINUTES') {
+                    script {
+                        def qg = waitForQualityGate()
+                        if (qg.status != 'OK') {
+                            error "Pipeline aborted due to Quality Gate failure: ${qg.status}"
+                        } else {
+                            echo "Quality Gate Passed Successfully: ${qg.status}"
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('6. IaC / Helm Scan - Checkov') {
+            steps {
+                echo 'Scanning Helm charts with Checkov...'
+                sh "checkov -d ${HELM_DIR} -o cli -o json --output-file-path . --soft-fail"
+            }
+        }
+
+        stage('7. Docker Build Images') {
+            steps {
+                echo 'Building Docker images...'
+                script {
+                    dockerBackend  = docker.build("${ECR_REGISTRY}/${BACKEND_IMAGE_NAME}:${IMAGE_TAG}", "${BACKEND_DIR}")
+                    dockerFrontend = docker.build("${ECR_REGISTRY}/${FRONTEND_IMAGE_NAME}:${IMAGE_TAG}", "${FRONTEND_DIR}")
+                }
+            }
+        }
+
+        stage('8. Container Scan - Trivy') {
+            steps {
+                echo 'Scanning Docker images with Trivy...'
+                sh "trivy image --format template --template '@contrib/html.tpl' -o trivy-backend-report.html ${ECR_REGISTRY}/${BACKEND_IMAGE_NAME}:${IMAGE_TAG} || true"
+                sh "trivy image --format template --template '@contrib/html.tpl' -o trivy-frontend-report.html ${ECR_REGISTRY}/${FRONTEND_IMAGE_NAME}:${IMAGE_TAG} || true"
+            }
+        }
+
+        stage('9. Push Images to AWS ECR') {
+            steps {
+                echo 'Pushing Docker images to AWS ECR...'
+                withCredentials([usernamePassword(credentialsId: "${AWS_CREDENTIALS_ID}", usernameVariable: 'AWS_ACCESS_KEY_ID', passwordVariable: 'AWS_SECRET_ACCESS_KEY')]) {
+                    sh '''
+                        aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $ECR_REGISTRY
+                        docker push $ECR_REGISTRY/$BACKEND_IMAGE_NAME:$IMAGE_TAG
+                        docker push $ECR_REGISTRY/$FRONTEND_IMAGE_NAME:$IMAGE_TAG
+                    '''
+                }
+            }
+        }
+
+        stage('10. Update Helm values-dev.yaml for ArgoCD') {
+            steps {
+                echo 'Updating imageVersion inside helm/values-dev.yaml...'
+                withCredentials([usernamePassword(credentialsId: "${GIT_CREDENTIALS_ID}", usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASSWORD')]) {
+                    sh '''
+                        git clone https://$GIT_USER:$GIT_PASSWORD@$GIT_REPO_URL manifest-repo
+                        cd manifest-repo/$HELM_DIR
+
+                        NEW_TAG="$IMAGE_TAG"
+                        sed -i '/backend:/,/frontend:/ s|imageVersion:.*|imageVersion: "'"$NEW_TAG"'"|' values-dev.yaml
+                        sed -i '/frontend:/,$ s|imageVersion:.*|imageVersion: "'"$NEW_TAG"'"|' values-dev.yaml
+
+                        git config user.email "jenkins-ci@example.com"
+                        git config user.name "Jenkins CI Bot"
+                        git add values-dev.yaml
+                        git commit -m "chore(cd): update imageVersion in values-dev.yaml to $NEW_TAG [skip ci]"
+                        git push origin main
+                    '''
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            echo 'Archiving generated reports...'
+            archiveArtifacts artifacts: '*report*.*', allowEmptyArchive: true
+
+            echo 'Cleaning up local Docker images...'
+            sh "docker rmi ${ECR_REGISTRY}/${BACKEND_IMAGE_NAME}:${IMAGE_TAG} || true"
+            sh "docker rmi ${ECR_REGISTRY}/${FRONTEND_IMAGE_NAME}:${IMAGE_TAG} || true"
+            cleanWs()
+        }
+        
+        success {
+            emailext (
+                to: "${RECIPIENT_EMAIL}",
+                subject: "SUCCESSFUL: Job '${env.JOB_NAME}' [Build #${env.BUILD_NUMBER}]",
+                body: """
+                    <html>
+                    <body style="font-family: Arial, sans-serif;">
+                        <h2 style="color: green;">Build Status: SUCCESS</h2>
+                        <p>Hi Team,</p>
+                        <p>The pipeline execution for <b>${env.JOB_NAME}</b> (Build #${env.BUILD_NUMBER}) completed successfully.</p>
+                        
+                        <h3>Pipeline Details:</h3>
+                        <ul>
+                            <li><b>Backend Image:</b> ${ECR_REGISTRY}/${BACKEND_IMAGE_NAME}:${IMAGE_TAG}</li>
+                            <li><b>Frontend Image:</b> ${ECR_REGISTRY}/${FRONTEND_IMAGE_NAME}:${IMAGE_TAG}</li>
+                            <li><b>Helm Values:</b> imageVersion updated to "${IMAGE_TAG}" in Git.</li>
+                        </ul>
+
+                        <h3>Security Reports Archived:</h3>
+                        <ul>
+                            <li>GitLeaks (Secrets Scan)</li>
+                            <li>Snyk (Dependencies Scan)</li>
+                            <li>SonarQube (SAST Scan)</li>
+                            <li>Checkov (Helm Scan)</li>
+                            <li>Trivy (Container Security Scan)</li>
+                        </ul>
+                        <p>View artifacts in Jenkins: <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
+                    </body>
+                    </html>
+                """,
+                mimeType: 'text/html',
+                attachLog: true
+            )
+        }
+
+        failure {
+            emailext (
+                to: "${RECIPIENT_EMAIL}",
+                subject: "FAILED: Job '${env.JOB_NAME}' [Build #${env.BUILD_NUMBER}]",
+                body: """
+                    <html>
+                    <body style="font-family: Arial, sans-serif;">
+                        <h2 style="color: red;">Build Status: FAILED</h2>
+                        <p>Hi Team,</p>
+                        <p>The pipeline execution for <b>${env.JOB_NAME}</b> (Build #${env.BUILD_NUMBER}) has failed.</p>
+                        <p>Check console logs for debugging: <a href="${env.BUILD_URL}">${env.BUILD_URL}</a></p>
+                    </body>
+                    </html>
+                """,
+                mimeType: 'text/html',
+                attachLog: true
+            )
+        }
+    }
+}
