@@ -168,28 +168,29 @@ stage('5. SonarQube Quality Gate Check') {
         }
 
         stage('9. Container Scan - Trivy') {
-            steps {
-                echo 'Scanning Backend image with Trivy...'
+    steps {
+        echo 'Scanning Backend image with Trivy...'
 
-                sh '''
-                    trivy image \
-                        --format template \
-                        --template "@contrib/html.tpl" \
-                        -o trivy-backend-report.html \
-                        "$ECR_REGISTRY/$BACKEND_IMAGE_NAME:$IMAGE_TAG" || true
-                '''
+        sh '''
+            trivy image \
+                --format template \
+                --template "@/usr/local/share/trivy/templates/html.tpl" \
+                -o trivy-backend-report.html \
+                "$ECR_REGISTRY/$BACKEND_IMAGE_NAME:$IMAGE_TAG" || true
+        '''
 
-                echo 'Scanning Frontend image with Trivy...'
+        echo 'Scanning Frontend image with Trivy...'
 
-                sh '''
-                    trivy image \
-                        --format template \
-                        --template "@contrib/html.tpl" \
-                        -o trivy-frontend-report.html \
-                        "$ECR_REGISTRY/$FRONTEND_IMAGE_NAME:$IMAGE_TAG" || true
-                '''
-            }
-        }
+        sh '''
+            trivy image \
+                --format template \
+                --template "@/usr/local/share/trivy/templates/html.tpl" \
+                -o trivy-frontend-report.html \
+                "$ECR_REGISTRY/$FRONTEND_IMAGE_NAME:$IMAGE_TAG" || true
+        '''
+    }
+}
+        
 
         stage('10. Push Images to AWS ECR') {
             steps {
