@@ -130,11 +130,10 @@ pipeline {
             steps {
                 echo 'Updating imageVersion inside helm/values-dev.yaml...'
                 withCredentials([usernamePassword(credentialsId: "${GIT_CREDENTIALS_ID}", usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASSWORD')]) {
-                    sh """
+                    sh '''
                         git clone https://${GIT_USER}:${GIT_PASSWORD}@${GIT_REPO_URL} manifest-repo
                         cd manifest-repo/${HELM_DIR}
 
-                        # helm/values-dev.yaml path lo unna backend & frontend imageVersion update cheyyadam
                         sed -i '/backend:/,/frontend:/ s|imageVersion:.*|imageVersion: "${IMAGE_TAG}"|' values-dev.yaml
                         sed -i '/frontend:/,$ s|imageVersion:.*|imageVersion: "${IMAGE_TAG}"|' values-dev.yaml
 
@@ -143,7 +142,7 @@ pipeline {
                         git add values-dev.yaml
                         git commit -m "chore(cd): update imageVersion in values-dev.yaml to ${IMAGE_TAG} [skip ci]"
                         git push origin main
-                    """
+                    '''
                 }
             }
         }
