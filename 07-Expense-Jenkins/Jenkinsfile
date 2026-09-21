@@ -190,21 +190,23 @@ stage('5. SonarQube Quality Gate Check') {
         '''
     }
 }
-      stage('10. Push Images to AWS ECR') {
+     stage('10. Push Images to AWS ECR') {
     steps {
         echo 'Pushing Docker images to AWS ECR...'
 
         withCredentials([
-            [
-                $class: 'AmazonWebServicesCredentialsBinding',
+            usernamePassword(
                 credentialsId: 'aws-ecr-credentials',
-                accessKeyVariable: 'AWS_ACCESS_KEY_ID',
-                secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
-            ]
+                usernameVariable: 'AWS_ACCESS_KEY_ID',
+                passwordVariable: 'AWS_SECRET_ACCESS_KEY'
+            )
         ]) {
             sh '''
-                echo "Checking AWS authentication..."
+                echo "Verifying AWS credentials..."
+
                 aws sts get-caller-identity
+
+                echo "Logging into AWS ECR..."
 
                 aws ecr get-login-password \
                     --region "$AWS_REGION" |
@@ -212,8 +214,12 @@ stage('5. SonarQube Quality Gate Check') {
                     --username AWS \
                     --password-stdin "$ECR_REGISTRY"
 
+                echo "Pushing Backend image..."
+
                 docker push \
                     "$ECR_REGISTRY/$BACKEND_IMAGE_NAME:$IMAGE_TAG"
+
+                echo "Pushing Frontend image..."
 
                 docker push \
                     "$ECR_REGISTRY/$FRONTEND_IMAGE_NAME:$IMAGE_TAG"
