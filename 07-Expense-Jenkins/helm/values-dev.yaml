@@ -1,9 +1,9 @@
 deployment:
   backend:
     imageURL: "376159574294.dkr.ecr.us-east-1.amazonaws.com/expense-backend"
-    imageVersion: "1"
+    imageVersion: "3"
     replicaCount: 2
   frontend:
     imageURL: "376159574294.dkr.ecr.us-east-1.amazonaws.com/expense-frontend"
-    imageVersion: "1"
+    imageVersion: "3"
     replicaCount: 2
