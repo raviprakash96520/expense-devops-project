@@ -81,55 +81,44 @@ pipeline {
             }
         }
 
-        stage('4. SAST Scan - SonarQube') {
-            steps {
-                echo 'Running SonarQube SAST and code quality scan...'
+       stage('4. SAST Scan - SonarQube') {
+    steps {
+        echo 'Running SonarQube SAST and code quality scan...'
 
-                withCredentials([
-                    string(
-                        credentialsId: "${SONAR_CREDENTIALS_ID}",
-                        variable: 'SONAR_TOKEN'
-                    )
-                ]) {
-                    sh '''
-                        export JAVA_HOME=/usr/lib/jvm/java-21-openjdk-21.0.12.1.1-1.2.el9.x86_64
-                        export PATH=$JAVA_HOME/bin:$PATH
+        withSonarQubeEnv('SonarQube') {
+            sh '''
+                sonar-scanner \
+                    -Dsonar.projectKey=expense-app \
+                    -Dsonar.projectName="Expense Application" \
+                    -Dsonar.sources="$BACKEND_DIR,$FRONTEND_DIR"
+            '''
+        }
+    }
+}
 
-                        sonar-scanner \
-                            -Dsonar.host.url=http://13.218.249.139:9000 \
-                            -Dsonar.token="$SONAR_TOKEN" \
-                            -Dsonar.projectKey=expense-app \
-                            -Dsonar.projectName="Expense Application" \
-                            -Dsonar.sources="$BACKEND_DIR,$FRONTEND_DIR"
-                    '''
+stage('5. SonarQube Quality Gate Check') {
+    steps {
+        echo 'Waiting for SonarQube Quality Gate result...'
+
+        timeout(time: 5, unit: 'MINUTES') {
+            script {
+                def qg = waitForQualityGate()
+
+                echo "SonarQube Quality Gate Status: ${qg.status}"
+
+                if (qg.status != 'OK') {
+                    echo """
+                    WARNING:
+                    SonarQube Quality Gate status is ${qg.status}.
+                    Pipeline will continue for DevSecOps testing.
+                    """
+                } else {
+                    echo 'SonarQube Quality Gate Passed.'
                 }
             }
         }
-
-        stage('5. SonarQube Quality Gate Check') {
-            steps {
-                echo 'Waiting for SonarQube Quality Gate result...'
-
-                timeout(time: 5, unit: 'MINUTES') {
-                    script {
-                        def qg = waitForQualityGate()
-
-                        echo "SonarQube Quality Gate Status: ${qg.status}"
-
-                        if (qg.status != 'OK') {
-                            echo """
-                            WARNING:
-                            SonarQube Quality Gate status is ${qg.status}.
-                            Pipeline will continue for DevSecOps testing.
-                            """
-                        } else {
-                            echo 'SonarQube Quality Gate Passed.'
-                        }
-                    }
-                }
-            }
-        }
-
+    }
+}
         stage('6. IaC / Helm Scan - Checkov') {
             steps {
                 echo 'Scanning Helm charts with Checkov...'
