@@ -192,33 +192,36 @@ stage('5. SonarQube Quality Gate Check') {
 }
         
 
-        stage('10. Push Images to AWS ECR') {
-            steps {
-                echo 'Pushing Docker images to AWS ECR...'
+       stage('10. Push Images to AWS ECR') {
+    steps {
+        echo 'Pushing Docker images to AWS ECR...'
 
-                withCredentials([
-                    usernamePassword(
-                        credentialsId: "${AWS_CREDENTIALS_ID}",
-                        usernameVariable: 'AWS_ACCESS_KEY_ID',
-                        passwordVariable: 'AWS_SECRET_ACCESS_KEY'
-                    )
-                ]) {
-                    sh '''
-                        aws ecr get-login-password \
-                            --region "$AWS_REGION" |
-                        docker login \
-                            --username AWS \
-                            --password-stdin "$ECR_REGISTRY"
+        withCredentials([
+            [
+                $class: 'AmazonWebServicesCredentialsBinding',
+                credentialsId: 'aws-ecr-credentials',
+                accessKeyVariable: 'AWS_ACCESS_KEY_ID',
+                secretKeyVariable: 'AWS_SECRET_ACCESS_KEY'
+            ]
+        ]) {
+            sh '''
+                aws sts get-caller-identity
 
-                        docker push \
-                            "$ECR_REGISTRY/$BACKEND_IMAGE_NAME:$IMAGE_TAG"
+                aws ecr get-login-password \
+                    --region "$AWS_REGION" |
+                docker login \
+                    --username AWS \
+                    --password-stdin "$ECR_REGISTRY"
 
-                        docker push \
-                            "$ECR_REGISTRY/$FRONTEND_IMAGE_NAME:$IMAGE_TAG"
-                    '''
-                }
-            }
+                docker push \
+                    "$ECR_REGISTRY/$BACKEND_IMAGE_NAME:$IMAGE_TAG"
+
+                docker push \
+                    "$ECR_REGISTRY/$FRONTEND_IMAGE_NAME:$IMAGE_TAG"
+            '''
         }
+    }
+}
 
         stage('11. Update Helm values-dev.yaml for ArgoCD') {
             steps {
